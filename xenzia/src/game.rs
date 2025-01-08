@@ -1,28 +1,42 @@
 extern crate termion;
 
-use termion::{ raw::IntoRawMode, event::{ Key }, clear, cursor, input::TermRead };
-use std::{io::{ stdout, stdin, Read, Write, BufWriter}, collections::VecDeque, time::{ Instant, Duration}, thread::sleep };
+use termion::{
+    raw::IntoRawMode,
+    event::{ Key },
+    clear,
+    cursor,
+    input::TermRead,
+    color};
+
+use std::{
+    io::{ stdout, stdin, BufRead, BufReader, Write },
+    fs::OpenOptions,
+    collections::VecDeque,
+    time::{ Instant, Duration},
+    thread::sleep };
+
 use rand::Rng;
 
 
 fn game_grid(stdout: &mut std::io::Stdout, width: u16, height: u16) {
     write!(stdout, "{}", cursor::Goto(1, 1)).expect("Unable to position cursor to draw top border");
-    print!("+");
+    print!("##");
     for _ in 0..width {
-        print!("=");
+        print!("##");
     }
-    print!("+");
+    print!("##");
 
     for y in 2..=height + 1 {
-        write!(stdout, "{}#", cursor::Goto(1, y)).expect("Unable to position cursor to draw side border");
-        write!(stdout, "{}#", cursor::Goto(width + 2, y)).expect("fuck, i'll add proper error-handling, tired with thess expect blocks, will just use unwraps as placeholders fo now");
+        write!(stdout, "{}##", cursor::Goto(1, y)).expect("Unable to position cursor to draw side border");
+        write!(stdout, "{}##", cursor::Goto(width + 2, y)).expect("fuck, i'll add proper error-handling, tired with thess expect blocks, will just use unwraps as placeholders fo now");
     }
 
     write!(stdout, "{}", cursor::Goto(1, height + 2)).unwrap();
+    print!("##");
     for _ in 0..width {
-        print!("=");
+        print!("##");
     }
-    println!("+");
+    println!("##");
 
     stdout.flush().unwrap();
 }
@@ -46,9 +60,12 @@ fn food_position(x: &mut u16, y: &mut u16, snake: &VecDeque<(u16, u16)>, width: 
 
 
 fn draw_snake(stdout: &mut std::io::Stdout, snake: &VecDeque<(u16, u16)>) {
-    for &(x, y) in snake {
-        write!(stdout, "{}", cursor::Goto(x, y)).unwrap();
-        print!("O=");
+    if let Some(&(head_x, head_y)) = snake.front() {
+        write!(stdout, "{}O", cursor::Goto(head_x, head_y)).unwrap();
+    }
+
+    for &(x, y) in snake.iter().skip(1) {
+        write!(stdout, "{}=", cursor::Goto(x, y)).unwrap();
     }
 }
 
@@ -89,7 +106,8 @@ fn detect_collision(snake: &VecDeque<(u16, u16)>, width: u16, height: u16) -> bo
 
 fn consume_food(
     snake: &mut VecDeque<(u16, u16)>,
-    food_x: &mut u16, food_y: &mut u16,
+    food_x: &mut u16,
+    food_y: &mut u16,
     stdout: &mut std::io::Stdout,
     width: u16,
     height: u16) {
@@ -104,7 +122,7 @@ fn consume_food(
     }
 }
 
-fn display_text(stdout: &mut std::io::Stdout, lines: &[&str]) {
+fn display_text(stdout: &mut std::io::Stdout, lines: &[&str], color_code: color::Rgb) {
     let terminal_size = termion::terminal_size().unwrap();
     let terminal_width = terminal_size.0;
     let terminal_height = terminal_size.1;
@@ -112,7 +130,7 @@ fn display_text(stdout: &mut std::io::Stdout, lines: &[&str]) {
     let start_y = (terminal_height / 2) - (lines.len() as u16 / 2);
     for (i, line) in lines.iter().enumerate() {
         let x = (terminal_width / 2) - (line.len() as u16 / 2);
-        write!(stdout, "{}{}", cursor::Goto(x, start_y + i as u16), line).unwrap();
+        write!(stdout, "{}{}{}{}", cursor::Goto(x, start_y + i as u16), color::Fg(color_code), line, color::Fg(color::Reset)).unwrap();
     }
     stdout.flush().unwrap();
 }
@@ -134,7 +152,7 @@ fn welcome_screen() {
         "Press 'ENTER' to start..."
     ];
 
-    display_text(&mut raw_stdout, &welcome_text);
+    display_text(&mut raw_stdout, &welcome_text, color::Rgb(0, 0, 255));
 
     let stdin = stdin();
     for key in stdin.keys() {
@@ -159,7 +177,7 @@ fn pause_screen() -> Option<String> {
         "Press [C] to Continue, [R] to Restart, or [E] to Exit",
     ];
 
-    display_text(&mut raw_stdout, &pause_text);
+    display_text(&mut raw_stdout, &pause_text, color::Rgb(255, 255, 0));
 
     let stdin = stdin();
     for key in stdin.keys() {
@@ -173,7 +191,7 @@ fn pause_screen() -> Option<String> {
     None
 }
 
-fn game_over_screen() -> bool {
+fn game_over_screen(score: u32) -> bool {
     let stdout = stdout();
     let mut raw_stdout = stdout.into_raw_mode().unwrap();
 
@@ -185,7 +203,8 @@ fn game_over_screen() -> bool {
         "Press [R] to Restart or [E] to Exit"
     ];
 
-    display_text(&mut raw_stdout, &game_over_text);
+    score_tracker(score);
+    display_text(&mut raw_stdout, &game_over_text, color::Rgb(255, 0, 0));
 
     let stdin = stdin();
     for key in stdin.keys() {
@@ -198,7 +217,44 @@ fn game_over_screen() -> bool {
     false
 }
 
-fn game_loop() -> bool {
+fn score_tracker(score: u32) {
+    const SCORE_FILE: &str = "scores.txt";
+    const MAX_SCORES: usize = 5;
+
+    let mut scores = Vec::new();
+    if let Ok(file) = OpenOptions::new().read(true).open(SCORE_FILE) {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Ok(num) = line.trim().parse::<u32>() {
+                    scores.push(num)
+                }
+            }
+        }
+    }
+
+    scores.push(score);
+    scores.sort_unstable_by(|a, b| b.cmp(a));
+    scores.truncate(MAX_SCORES);
+
+    if let Ok(mut file) = OpenOptions::new().write(true).create(true).truncate(true).open(SCORE_FILE) {
+        for score in &scores {
+            writeln!(file, "{}", score).unwrap();
+        }
+    }
+}
+
+fn display_score(stdout: &mut std::io::Stdout, score: u32) {
+    let score_message = [
+        &format!("Your Score: {}", score),
+        "",
+        "Press [R] to Restart or [E] to Exit"
+    ];
+
+    display_text(stdout, &score_message, color::Rgb(255, 255, 0));
+}
+
+fn game_loop() -> (bool, u32) {
     let (width, height) = termion::terminal_size().unwrap();
     let grid_width = width - 2;
     let grid_height = height - 3;
@@ -225,6 +281,7 @@ fn game_loop() -> bool {
     raw_stdout.flush().expect("unable to display output");
 
     let mut direction = Direction::Right;
+    let mut score = 0;
 
     loop {
         if let Some(Ok(key)) = stdin_keys.next() {
@@ -237,13 +294,13 @@ fn game_loop() -> bool {
                     if let Some(choice) = pause_screen() {
                         match choice.as_str() {
                             "continue" => continue,
-                            "restart" => return true,
-                            "exit" => return false,
+                            "restart" => return (true, score),
+                            "exit" => return (false, score),
                             _ => {}
                         }
                     }
                 }
-                Key::Ctrl('c') => return false,
+                Key::Ctrl('c') => return (false, score),
                 _ => {}
             }
         }
@@ -251,13 +308,13 @@ fn game_loop() -> bool {
         snake_movement(&mut snake, direction);
 
         if detect_collision(&snake, grid_width, grid_height) {
-            println!("GAME OVER");
-            return false;
+            return (game_over_screen(score), score);
+        }
+        if *snake.front().unwrap() == (food_x, food_y) {
+            score += 1;
         }
 
-        if snake.front() == Some(&(food_x, food_y)) {
-            consume_food(&mut snake, &mut food_y, &mut food_x, &mut raw_stdout, grid_width, grid_height);
-        }
+        consume_food(&mut snake, &mut food_x, &mut food_y, &mut raw_stdout, grid_width, grid_height);
 
         write!(raw_stdout, "{}", clear::All).unwrap();
         game_grid(&mut raw_stdout, grid_width, grid_height);
@@ -274,11 +331,12 @@ pub fn initialize_game() {
     welcome_screen();
 
     loop {
-        if !game_loop(){
+        let (restart, score) = game_loop();
+        if !restart {
             break;
         }
 
-        if !game_over_screen() {
+        if !game_over_screen(score) {
             break;
         }
     }
