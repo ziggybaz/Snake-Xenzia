@@ -12,7 +12,7 @@ use std::{
     io::{ stdout, stdin, BufRead, BufReader, Write },
     fs::OpenOptions,
     collections::VecDeque,
-    time::{ Instant, Duration},
+    time::Duration,
     thread::sleep };
 
 use rand::Rng;
@@ -346,4 +346,116 @@ pub fn initialize_game() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{ Cursor, BufRead, BufReader };
+    use std::collections::VecDeque;
+    use std::fs;
+    use std::fs::{ File };
+    use std::path::Path;
+
+    #[test]
+    fn test_game_grid() {
+        let mut buffer = Cursor::new(Vec::new());
+        let width = 5;
+        let height = 3;
+
+        game_grid(&mut buffer, width, height);
+
+        let output = String::from_utf8(buffer.into_inner()).expect("Shize, failed to convert the buffer to a string mate.");
+        let expected_output = concat!(
+            "\x1B[1;1H##\n",
+            "####\n",
+            "\x1B[1;2H##\n",
+            "\x1B[4;2H##\n",
+            "\x1B[1;3H##\n",
+            "\x1B[4;3H##\n",
+            "\x1B[1;4H##\n",
+            "####\n"
+            );
+
+        assert_eq!(output, expected_output);
+    }
+
+    #[test]
+    fn test_draw_food() {
+        let mut buffer = Cursor::new(Vec::new());
+        let x = 5;
+        let y = 3;
+
+        draw_food(&mut buffer, x, y);
+
+        let output = String::from_utf8(buffer.into_inner()).expect("Shize, failed to convert the buffer to a string bruv.");
+        let expected_output = format!("{}\n", cursor::Goto(x, y));
+
+        assert_eq!(output, expected_output);
+    }
+
+    #[test]
+    fn test_food_position() {
+        let mut x = 0;
+        let mut y = 0;
+        let snake = VecDeque::from(vec![(3, 3), (4, 4), (5, 5)]);
+        let width = 5;
+        let height = 3;
+
+        food_position(&mut x, &mut y, &snake, width, height);
+
+        assert!(x >= 2 && x <= width, "the x coordinate is out of bounds...");
+        assert!(y >= 2 && y <= height, "the y coordinate is out of bounds...");
+        assert!(!snake.contains(&(x, y)), "the food position ought not to clash with the snake");
+    }
+
+    #[test]
+    fn test_snake_movement() {
+        let mut snake = VecDeque::from(vec![(5, 5), (5, 6), (5, 7)]);
+        let direction = Direction::Up;
+
+        snake_movement(&mut snake, direction);
+
+        let test_movement = VecDeque::from(vec![(5, 4), (10, 100), (4, 69)]);
+
+        assert_eq!(snake, test_movement, "there is an issue with how the snake is moving");
+    }
+
+    #[test]
+    fn test_detect_collision() {
+        let snake = VecDeque::from(vec![(5, 5), (5, 6), (5, 7)]);
+        let width = 10;
+        let height = 10;
+
+        assert_eq!(detect_collision(&snake, width, height), false);
+
+        let snake_kugonga_wall = VecDeque::from(vec![(1, 5)]);
+        assert_eq!(detect_collision(&snake_kugonga_wall, width, height), true);
+
+        let snake_kujigonga = VecDeque::from(vec![(5, 5), (5, 6), (5, 5)]);
+        assert_eq!(detect_collision(&snake_kujigonga, width, height), true);
+    }
+
+    const SCORE_FILE: &str = "scores_test.txt";
+
+    fn clear_score_file() {
+        if Path::new(SCORE_FILE).exists() {
+            fs::remove_file(SCORE_FILE).expect("obviously unable to remove the file...");
+        }
+    }
+
+    #[test]
+    fn test_score_tracker() {
+        clear_score_file();
+
+        score_tracker(100);
+        score_tracker(200);
+        score_tracker(250);
+
+        let file = File::open(SCORE_FILE).expect("unable to open file");
+        let reader = BufReader::new(file);
+        let scores: Vec<u32> = reader
+            .lines()
+            .filter_map(|line| line.ok())
+            .filter_map(|line| line.trim().parse().ok())
+            .collect();
+
+        assert_eq!(scores.len(), 3, "should have 3 scores");
+        assert_eq!(scores, vec![250, 200, 100]);
+    }
 }
